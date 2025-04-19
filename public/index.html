@@ -1,0 +1,251 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Daily Task Notifier</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+    <style>
+        body {
+            background-color: #f8f9fa;
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+        }
+        .container {
+            max-width: 800px;
+            margin-top: 30px;
+        }
+        .task-card {
+            border-radius: 10px;
+            box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+            margin-bottom: 20px;
+            transition: transform 0.2s;
+        }
+        .task-card:hover {
+            transform: translateY(-5px);
+        }
+        .complete-button {
+            min-width: 120px;
+        }
+        .completed-badge {
+            background-color: #198754;
+            color: white;
+            padding: 5px 10px;
+            border-radius: 20px;
+            font-size: 12px;
+        }
+        .pending-badge {
+            background-color: #ffc107;
+            color: #343a40;
+            padding: 5px 10px;
+            border-radius: 20px;
+            font-size: 12px;
+        }
+        .toast-container {
+            position: fixed;
+            top: 20px;
+            right: 20px;
+            z-index: 1000;
+        }
+        .action-button {
+            margin-right: 5px;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1 class="text-center mb-4">Daily Task Notifier</h1>
+        
+        <div class="card mb-4">
+            <div class="card-body">
+                <h5 class="card-title">Add New Task</h5>
+                <form id="add-task-form">
+                    <div class="input-group mb-3">
+                        <input type="text" id="task-input" class="form-control" placeholder="Enter task title" required>
+                        <button class="btn btn-primary" type="submit">Add Task</button>
+                    </div>
+                </form>
+            </div>
+        </div>
+        
+        <div class="row">
+            <div class="col-md-12">
+                <h2>Your Tasks</h2>
+                <div id="tasks-container">
+                    <!-- Tasks will be displayed here -->
+                    <div class="text-center py-5">
+                        <div class="spinner-border text-primary" role="status">
+                            <span class="visually-hidden">Loading...</span>
+                        </div>
+                        <p class="mt-2">Loading tasks...</p>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+    
+    <!-- Toast notifications container -->
+    <div class="toast-container" id="notification-container"></div>
+    
+    <!-- Task item template -->
+    <template id="task-template">
+        <div class="card task-card mb-3">
+            <div class="card-body">
+                <div class="d-flex justify-content-between align-items-center">
+                    <div>
+                        <h5 class="card-title task-title">Task Title</h5>
+                        <p class="card-text">
+                            <span class="badge status-badge">Pending</span>
+                        </p>
+                    </div>
+                    <div>
+                        <button class="btn btn-success complete-button action-button">Mark Complete</button>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </template>
+    
+    <!-- Notification template -->
+    <template id="notification-template">
+        <div class="toast" role="alert" aria-live="assertive" aria-atomic="true" data-bs-delay="5000">
+            <div class="toast-header">
+                <strong class="me-auto notification-title">Notification Title</strong>
+                <small class="text-muted">just now</small>
+                <button type="button" class="btn-close" data-bs-dismiss="toast" aria-label="Close"></button>
+            </div>
+            <div class="toast-body notification-body">
+                Notification Message
+            </div>
+        </div>
+    </template>
+    
+    <!-- JavaScript -->
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
+    <script src="https://cdn.socket.io/4.6.0/socket.io.min.js"></script>
+    <script>
+        document.addEventListener('DOMContentLoaded', function() {
+            // Connect to Socket.IO server
+            const socket = io();
+            
+            // DOM elements
+            const tasksContainer = document.getElementById('tasks-container');
+            const addTaskForm = document.getElementById('add-task-form');
+            const taskInput = document.getElementById('task-input');
+            const taskTemplate = document.getElementById('task-template');
+            const notificationTemplate = document.getElementById('notification-template');
+            const notificationContainer = document.getElementById('notification-container');
+            
+            // Handle task form submission
+            addTaskForm.addEventListener('submit', function(e) {
+                e.preventDefault();
+                
+                const title = taskInput.value.trim();
+                if (!title) return;
+                
+                // Send request to create task
+                fetch('/api/v1/tasks', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify({ title })
+                })
+                .then(response => response.json())
+                .then(data => {
+                    // Clear input field
+                    taskInput.value = '';
+                })
+                .catch(error => {
+                    console.error('Error creating task:', error);
+                    showNotification('Error', 'Failed to create task. Please try again.');
+                });
+            });
+            
+            // Listen for task status updates
+            socket.on('taskStatus', function(tasks) {
+                renderTasks(tasks);
+            });
+            
+            // Listen for notifications
+            socket.on('notification', function(notification) {
+                showNotification(notification.title, notification.message);
+            });
+            
+            // Render tasks
+            function renderTasks(tasks) {
+                // Clear loading spinner
+                tasksContainer.innerHTML = '';
+                
+                if (tasks.length === 0) {
+                    tasksContainer.innerHTML = '<p class="text-center py-4">No tasks found. Add a task to get started!</p>';
+                    return;
+                }
+                
+                // Render each task
+                tasks.forEach(task => {
+                    const taskElement = taskTemplate.content.cloneNode(true);
+                    
+                    // Set task details
+                    taskElement.querySelector('.task-title').textContent = task.title;
+                    
+                    const statusBadge = taskElement.querySelector('.status-badge');
+                    const completeButton = taskElement.querySelector('.complete-button');
+                    
+                    if (task.completed) {
+                        statusBadge.textContent = 'Completed';
+                        statusBadge.classList.add('completed-badge');
+                        completeButton.textContent = 'Completed';
+                        completeButton.classList.remove('btn-success');
+                        completeButton.classList.add('btn-outline-success');
+                        completeButton.disabled = true;
+                    } else {
+                        statusBadge.textContent = 'Pending';
+                        statusBadge.classList.add('pending-badge');
+                        
+                        // Add click handler for complete button
+                        completeButton.addEventListener('click', function() {
+                            markTaskComplete(task._id);
+                        });
+                    }
+                    
+                    tasksContainer.appendChild(taskElement);
+                });
+            }
+            
+            // Mark task as complete
+            function markTaskComplete(taskId) {
+                fetch(`/api/v1/tasks/${taskId}/complete`, {
+                    method: 'PATCH'
+                })
+                .then(response => response.json())
+                .then(data => {
+                    // Socket.IO will update the UI
+                })
+                .catch(error => {
+                    console.error('Error completing task:', error);
+                    showNotification('Error', 'Failed to mark task as complete.');
+                });
+            }
+            
+            // Show notification
+            function showNotification(title, message) {
+                const notificationElement = notificationTemplate.content.cloneNode(true);
+                
+                notificationElement.querySelector('.notification-title').textContent = title;
+                notificationElement.querySelector('.notification-body').textContent = message;
+                
+                const toastElement = notificationElement.querySelector('.toast');
+                notificationContainer.appendChild(toastElement);
+                
+                const toast = new bootstrap.Toast(toastElement);
+                toast.show();
+            }
+            
+            // Alternative method for task completion via Socket.IO
+            window.completeTaskViaSocket = function(taskId) {
+                socket.emit('completeTask', taskId);
+            };
+        });
+    </script>
+</body>
+</html> 
